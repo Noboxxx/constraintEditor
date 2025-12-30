@@ -1,6 +1,6 @@
 from PySide2.QtCore import QSize
 from PySide2.QtGui import QPixmap
-from PySide2.QtWidgets import QLineEdit, QHBoxLayout, QFormLayout
+from PySide2.QtWidgets import QLineEdit, QHBoxLayout, QFormLayout, QPushButton
 from PySide6.QtWidgets import QVBoxLayout, QTreeWidget, QTreeWidgetItem, QWidget, QLabel
 from PySide6.QtGui import QIcon, Qt, QPalette, QBrush
 from .utils import DockableWidget
@@ -9,13 +9,15 @@ from maya import cmds
 
 class Constraint:
 
+    ignored_connections = (
+        'MayaNodeEditorSavedTabsInfo'
+    )
+
     def __init__(self):
         self.name = None
 
     def is_defective(self):
-        has_parents = bool(self.get_parents())
-        has_children = bool(self.get_children())
-        defective = not has_parents and not has_children
+        defective = not self.get_parents() or not self.get_children()
         return defective
 
     def get_type(self):
@@ -26,7 +28,7 @@ class Constraint:
 
         parents = list()
         for source in sources:
-            if source not in parents and source != self.name:
+            if source not in parents and source != self.name and source not in self.ignored_connections:
                 parents.append(source)
 
         return parents
@@ -36,7 +38,7 @@ class Constraint:
 
         children = list()
         for destination in destinations:
-            if destination not in children and destination != self.name:
+            if destination not in children and destination != self.name and destination not in self.ignored_connections:
                 children.append(destination)
 
         return children
@@ -81,6 +83,8 @@ class ConstraintTree(QTreeWidget):
         super().__init__()
 
         self.setHeaderHidden(True)
+
+        self.setSelectionMode(self.SelectionMode.ExtendedSelection)
 
     def get_selected_constraints(self):
         constraints = list()
@@ -199,14 +203,40 @@ class ConstraintEditor(DockableWidget):
 
         self.constraint_info_widget = ConstraintInfoWidget()
 
+        select_constraints_btn = QPushButton()
+        select_constraints_btn.setIcon(QIcon(':out_aimConstraint.png'))
+        select_constraints_btn.clicked.connect(self.select_constraints)
+
+        select_parents_btn = QPushButton()
+        select_parents_btn.setIcon(QIcon(':input.png'))
+
+        select_children_btn = QPushButton()
+        select_children_btn.setIcon(QIcon(':output.png'))
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        btn_layout.addWidget(select_parents_btn)
+        btn_layout.addWidget(select_constraints_btn)
+        btn_layout.addWidget(select_children_btn)
+
         self.constraint_tree = ConstraintTree()
         self.constraint_tree.itemSelectionChanged.connect(self.reload_constraint_info_widget)
 
         main_layout = QVBoxLayout(self)
+        main_layout.addLayout(btn_layout)
         main_layout.addWidget(self.constraint_tree)
         main_layout.addWidget(self.constraint_info_widget)
 
         self.reload()
+
+    def select_constraints(self):
+        selected_constraints = self.constraint_tree.get_selected_constraints()
+        
+        constraint_names = list()
+        for constraint in selected_constraints:
+            constraint_names.append(constraint.name)
+
+        cmds.select(constraint_names)
 
     def reload(self):
         self.constraint_tree.reload()
