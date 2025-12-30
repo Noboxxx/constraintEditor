@@ -1,11 +1,23 @@
 from PySide2.QtCore import QSize
 from PySide2.QtGui import QPixmap
 from PySide2.QtWidgets import QLineEdit, QHBoxLayout, QFormLayout, QPushButton
+from PySide6.QtCore import QFile
 from PySide6.QtWidgets import QVBoxLayout, QTreeWidget, QTreeWidgetItem, QWidget, QLabel
 from PySide6.QtGui import QIcon, Qt, QPalette, QBrush
 from .utils import DockableWidget
 from maya import cmds
 
+
+def get_image_path_from_type(object_type, default=':default.svg'):
+    type_icon_path = f':{object_type}.svg'
+    type_icon_file = QFile(type_icon_path)
+
+    if type_icon_file.exists():
+        image_path = type_icon_path
+    else:
+        image_path = default
+
+    return image_path
 
 class Constraint:
 
@@ -75,7 +87,8 @@ class ConstraintItem(QTreeWidgetItem):
 
         self.setForeground(0, brush)
 
-        self.setIcon(0, QIcon(f':{self.constraint.get_type()}.svg'))
+        icon_type_path = get_image_path_from_type(self.constraint.get_type())
+        self.setIcon(0, QIcon(icon_type_path))
 
 
 class ConstraintTree(QTreeWidget):
@@ -131,29 +144,27 @@ class ConstraintInfoWidget(QWidget):
         type_info_layout_widget = QWidget()
         type_info_layout_widget.setLayout(type_info_layout)
 
-        self.constraint_name = QLineEdit()
-        self.constraint_name.setPlaceholderText('Name')
+        self.constraint_name_line = QLineEdit()
 
         self.parents_line = QLineEdit()
         self.parents_line.setReadOnly(True)
-        self.parents_line.setPlaceholderText('Parents')
 
         self.children_line = QLineEdit()
         self.children_line.setReadOnly(True)
-        self.children_line.setPlaceholderText('Children')
 
         self.default_palette = self.children_line.palette()
 
         main_layout = QFormLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.addRow('Name', self.constraint_name)
+        main_layout.addRow('Name', self.constraint_name_line)
         main_layout.addRow('Type', type_info_layout_widget)
         main_layout.addRow('Parents', self.parents_line)
         main_layout.addRow('Children', self.children_line)
 
     def clear(self):
         self.type_icon.setPixmap(self.default_pixmap)
-        self.constraint_name.setText('')
+
+        self.constraint_name_line.setText('')
         self.type_label.setText('')
 
         self.parents_line.setText('')
@@ -161,6 +172,8 @@ class ConstraintInfoWidget(QWidget):
 
         self.children_line.setText('')
         self.children_line.setPalette(self.default_palette)
+        
+        self.constraint_name_line.setReadOnly(True)
 
     def reload(self):
         self.clear()
@@ -170,11 +183,18 @@ class ConstraintInfoWidget(QWidget):
 
         constraint_type = self.constraint.get_type()
 
-        pixmap = QPixmap(f':{constraint_type}.svg')
+        type_image_path = get_image_path_from_type(constraint_type)
+
+        pixmap = QPixmap(type_image_path)
         pixmap = pixmap.scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
 
         self.type_icon.setPixmap(pixmap)
-        self.constraint_name.setText(self.constraint.name)
+        if not self.type_icon.pixmap():
+            print(self.constraint.name)
+
+        self.constraint_name_line.setText(self.constraint.name)
+        self.constraint_name_line.setReadOnly(False)
+
         self.type_label.setText(constraint_type)
 
         parents = self.constraint.get_parents()
@@ -209,9 +229,11 @@ class ConstraintEditor(DockableWidget):
 
         select_parents_btn = QPushButton()
         select_parents_btn.setIcon(QIcon(':input.png'))
+        select_parents_btn.clicked.connect(self.select_parents)
 
         select_children_btn = QPushButton()
         select_children_btn.setIcon(QIcon(':output.png'))
+        select_children_btn.clicked.connect(self.select_children)
 
         btn_layout = QHBoxLayout()
         btn_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
@@ -231,12 +253,34 @@ class ConstraintEditor(DockableWidget):
 
     def select_constraints(self):
         selected_constraints = self.constraint_tree.get_selected_constraints()
-        
+
         constraint_names = list()
         for constraint in selected_constraints:
             constraint_names.append(constraint.name)
 
         cmds.select(constraint_names)
+
+    def select_parents(self):
+        selected_constraints = self.constraint_tree.get_selected_constraints()
+
+        parents = list()
+        for constraint in selected_constraints:
+            for parent in constraint.get_parents():
+                if parent not in parents:
+                    parents.append(parent)
+
+        cmds.select(parents)
+
+    def select_children(self):
+        selected_constraints = self.constraint_tree.get_selected_constraints()
+
+        children = list()
+        for constraint in selected_constraints:
+            for child in constraint.get_children():
+                if child not in children:
+                    children.append(child)
+
+        cmds.select(children)
 
     def reload(self):
         self.constraint_tree.reload()
@@ -245,8 +289,8 @@ class ConstraintEditor(DockableWidget):
     def reload_constraint_info_widget(self, *args, **kwargs):
         selected_constraints = self.constraint_tree.get_selected_constraints()
 
-        if selected_constraints:
-            selected_constraint = selected_constraints[-1]
+        if len(selected_constraints) == 1:
+            selected_constraint = selected_constraints[0]
         else:
             selected_constraint = None
 
