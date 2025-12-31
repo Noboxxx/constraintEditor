@@ -172,7 +172,7 @@ class ConstraintItem(QTreeWidgetItem):
         self.setForeground(0, brush)
 
     def reload(self):
-        self.setText(0, self.constraint.path)
+        self.setText(0, self.constraint.get_name())
 
         self.defective = self.constraint.is_defective()
 
