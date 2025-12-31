@@ -1,5 +1,5 @@
 from PySide2.QtCore import QSize
-from PySide2.QtGui import QPixmap
+from PySide2.QtGui import QPixmap, QColor
 from PySide2.QtWidgets import QLineEdit, QHBoxLayout, QFormLayout, QPushButton
 from PySide6.QtCore import QFile
 from PySide6.QtWidgets import QVBoxLayout, QTreeWidget, QTreeWidgetItem, QWidget, QLabel
@@ -53,6 +53,36 @@ class ReloadWidgetOnSceneOpenedScriptJob(ScriptJob):
         self.widget.reload()
 
 
+class HighlightConstraintsOnSelectionChanged(ScriptJob):
+    EVENT_NAME = 'SelectionChanged'
+
+    def __init__(self, widget):
+        super().__init__()
+        self.widget = widget
+
+    def run(self):
+        selection = cmds.ls(sl=True, long=True)
+
+        for constraint_item in self.widget.constraint_tree.constraint_items:
+            # constraint_objects
+            constraint = constraint_item.constraint
+            parents = constraint.get_parents_paths()
+            children = constraint.get_children_paths()
+
+            constraint_objects = [constraint.path] + parents + children
+
+            # selected_in_scene
+            selected_in_scene = False
+
+            for obj in constraint_objects:
+                if obj in selection:
+                    selected_in_scene = True
+                    break
+
+            constraint_item.selected_in_scene = selected_in_scene
+            constraint_item.reload_color()
+
+
 class Constraint:
 
     ignored_connections = (
@@ -72,8 +102,8 @@ class Constraint:
     def get_type(self):
         return cmds.objectType(self.path)
 
-    def get_parents(self):
-        sources = cmds.listConnections(f'{self.path}.target', source=True, destination=False) or list()
+    def get_parents_paths(self):
+        sources = cmds.listConnections(f'{self.path}.target', source=True, destination=False, fullNodeName=True) or list()
 
         parents = list()
         for source in sources:
@@ -82,8 +112,11 @@ class Constraint:
 
         return parents
 
-    def get_children(self):
-        destinations = cmds.listConnections(self.path, source=False, destination=True) or list()
+    def get_parents(self):
+        return [x.split('|')[-1] for x in self.get_parents_paths()]
+
+    def get_children_paths(self):
+        destinations = cmds.listConnections(self.path, source=False, destination=True, fullNodeName=True) or list()
 
         children = list()
         for destination in destinations:
@@ -91,6 +124,9 @@ class Constraint:
                 children.append(destination)
 
         return children
+
+    def get_children(self):
+        return [x.split('|')[-1] for x in self.get_children_paths()]
 
     def get_uuid(self):
         uuids = cmds.ls(self.path, uuid=True)
@@ -103,7 +139,7 @@ class Constraint:
     def get_all(cls):
         constraints = list()
 
-        for constraint_path in cmds.ls(type='constraint'):
+        for constraint_path in cmds.ls(type='constraint', long=True):
             constraint = cls()
             constraint.path = constraint_path
             constraints.append(constraint)
@@ -116,20 +152,31 @@ class ConstraintItem(QTreeWidgetItem):
         super().__init__()
         self.constraint = None
 
+        self.defective = False
+        self.selected_in_scene = False
+
         self.red_brush = QBrush(Qt.GlobalColor.red)
+        self.blue_brush = QBrush(QColor(0, 255, 255))
         self.default_brush = self.foreground(0)
 
         self.setSizeHint(0, QSize(0, 25))
 
-    def reload(self):
-        self.setText(0, self.constraint.path)
-
-        if self.constraint.is_defective():
+    def reload_color(self):
+        if self.selected_in_scene:
+            brush = self.blue_brush
+        elif self.defective:
             brush = self.red_brush
         else:
             brush = self.default_brush
 
         self.setForeground(0, brush)
+
+    def reload(self):
+        self.setText(0, self.constraint.path)
+
+        self.defective = self.constraint.is_defective()
+
+        self.reload_color()
 
         icon_type_path = get_image_path_from_type(self.constraint.get_type())
         self.setIcon(0, QIcon(icon_type_path))
@@ -220,8 +267,34 @@ class ConstraintInfoWidget(QWidget):
         self.parents_line = QLineEdit()
         self.parents_line.setReadOnly(True)
 
+        self.parents_count_line = QLineEdit()
+        self.parents_count_line.setMaximumWidth(25)
+        self.parents_count_line.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.parents_count_line.setReadOnly(True)
+
+        parents_layout = QHBoxLayout()
+        parents_layout.setContentsMargins(0, 0, 0, 0)
+        parents_layout.addWidget(self.parents_line)
+        parents_layout.addWidget(self.parents_count_line)
+
+        parents_layout_widget = QWidget()
+        parents_layout_widget.setLayout(parents_layout)
+
         self.children_line = QLineEdit()
         self.children_line.setReadOnly(True)
+
+        self.children_count_line = QLineEdit()
+        self.children_count_line.setMaximumWidth(25)
+        self.children_count_line.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.children_count_line.setReadOnly(True)
+
+        children_layout = QHBoxLayout()
+        children_layout.setContentsMargins(0, 0, 0, 0)
+        children_layout.addWidget(self.children_line)
+        children_layout.addWidget(self.children_count_line)
+
+        children_layout_widget = QWidget()
+        children_layout_widget.setLayout(children_layout)
 
         self.default_palette = self.children_line.palette()
 
@@ -229,8 +302,8 @@ class ConstraintInfoWidget(QWidget):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.addRow('Name', self.constraint_name_line)
         main_layout.addRow('Type', type_info_layout_widget)
-        main_layout.addRow('Parents', self.parents_line)
-        main_layout.addRow('Children', self.children_line)
+        main_layout.addRow('Parents', parents_layout_widget)
+        main_layout.addRow('Children', children_layout_widget)
 
     def rename_constraint(self):
         if not self.constraint:
@@ -255,9 +328,13 @@ class ConstraintInfoWidget(QWidget):
         self.parents_line.setText('')
         self.parents_line.setPalette(self.default_palette)
 
+        self.parents_count_line.setText('')
+
         self.children_line.setText('')
         self.children_line.setPalette(self.default_palette)
-        
+
+        self.children_line.setText('')
+
         self.constraint_name_line.setReadOnly(True)
 
     def reload(self):
@@ -288,6 +365,8 @@ class ConstraintInfoWidget(QWidget):
             self.parents_line.setText('No parents found')
             self.parents_line.setPalette(self.red_palette)
 
+        self.parents_count_line.setText(str(len(parents)))
+
         children = self.constraint.get_children()
         if children:
             children_str = ', '.join(children)
@@ -295,6 +374,8 @@ class ConstraintInfoWidget(QWidget):
         else:
             self.children_line.setText('No children found')
             self.children_line.setPalette(self.red_palette)
+
+        self.children_count_line.setText(str(len(children)))
 
 
 class ConstraintEditor(DockableWidget):
@@ -308,7 +389,7 @@ class ConstraintEditor(DockableWidget):
             ReloadWidgetOnUndoScriptJob(self),
             ReloadWidgetOnRedoScriptJob(self),
             ReloadWidgetOnSceneOpenedScriptJob(self),
-            # HighlightConstraintsOnSelectionChanged(self),
+            HighlightConstraintsOnSelectionChanged(self),
         )
 
         self.constraint_info_widget = ConstraintInfoWidget()
