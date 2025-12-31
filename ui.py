@@ -19,6 +19,7 @@ def get_image_path_from_type(object_type, default=':default.svg'):
 
     return image_path
 
+
 class Constraint:
 
     ignored_connections = (
@@ -26,31 +27,34 @@ class Constraint:
     )
 
     def __init__(self):
-        self.name = None
+        self.path = None
+
+    def get_name(self):
+        return self.path.split('|')[-1]
 
     def is_defective(self):
         defective = not self.get_parents() or not self.get_children()
         return defective
 
     def get_type(self):
-        return cmds.objectType(self.name)
+        return cmds.objectType(self.path)
 
     def get_parents(self):
-        sources = cmds.listConnections(f'{self.name}.target', source=True, destination=False) or list()
+        sources = cmds.listConnections(f'{self.path}.target', source=True, destination=False) or list()
 
         parents = list()
         for source in sources:
-            if source not in parents and source != self.name and source not in self.ignored_connections:
+            if source not in parents and source != self.path and source not in self.ignored_connections:
                 parents.append(source)
 
         return parents
 
     def get_children(self):
-        destinations = cmds.listConnections(self.name, source=False, destination=True) or list()
+        destinations = cmds.listConnections(self.path, source=False, destination=True) or list()
 
         children = list()
         for destination in destinations:
-            if destination not in children and destination != self.name and destination not in self.ignored_connections:
+            if destination not in children and destination != self.path and destination not in self.ignored_connections:
                 children.append(destination)
 
         return children
@@ -59,9 +63,9 @@ class Constraint:
     def get_all(cls):
         constraints = list()
 
-        for constraint_name in cmds.ls(type='constraint'):
+        for constraint_path in cmds.ls(type='constraint'):
             constraint = cls()
-            constraint.name = constraint_name
+            constraint.path = constraint_path
             constraints.append(constraint)
 
         return constraints
@@ -78,7 +82,7 @@ class ConstraintItem(QTreeWidgetItem):
         self.setSizeHint(0, QSize(0, 25))
 
     def reload(self):
-        self.setText(0, self.constraint.name)
+        self.setText(0, self.constraint.path)
 
         if self.constraint.is_defective():
             brush = self.red_brush
@@ -94,6 +98,8 @@ class ConstraintItem(QTreeWidgetItem):
 class ConstraintTree(QTreeWidget):
     def __init__(self):
         super().__init__()
+
+        self.constraint_items = list()
 
         self.setHeaderHidden(True)
 
@@ -116,12 +122,14 @@ class ConstraintTree(QTreeWidget):
             constraint_item.constraint = constraint
             constraint_item.reload()
             self.addTopLevelItem(constraint_item)
+            self.constraint_items.append(constraint_item)
 
 
 class ConstraintInfoWidget(QWidget):
     def __init__(self):
         super().__init__()
 
+        self.constraint_tree = None
         self.constraint = None
 
         self.default_pixmap = QPixmap(':mmEmpty.png')
@@ -145,6 +153,7 @@ class ConstraintInfoWidget(QWidget):
         type_info_layout_widget.setLayout(type_info_layout)
 
         self.constraint_name_line = QLineEdit()
+        self.constraint_name_line.editingFinished.connect(self.rename_constraint)
 
         self.parents_line = QLineEdit()
         self.parents_line.setReadOnly(True)
@@ -160,6 +169,20 @@ class ConstraintInfoWidget(QWidget):
         main_layout.addRow('Type', type_info_layout_widget)
         main_layout.addRow('Parents', self.parents_line)
         main_layout.addRow('Children', self.children_line)
+
+    def rename_constraint(self):
+        if not self.constraint:
+            return
+
+        new_name = self.constraint_name_line.text()
+
+        if self.constraint.get_name() == new_name:
+            return
+
+        new_path = cmds.rename(self.constraint.path, new_name)
+        self.constraint.path = new_path
+
+        self.constraint_tree.reload()
 
     def clear(self):
         self.type_icon.setPixmap(self.default_pixmap)
@@ -189,10 +212,8 @@ class ConstraintInfoWidget(QWidget):
         pixmap = pixmap.scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
 
         self.type_icon.setPixmap(pixmap)
-        if not self.type_icon.pixmap():
-            print(self.constraint.name)
 
-        self.constraint_name_line.setText(self.constraint.name)
+        self.constraint_name_line.setText(self.constraint.get_name())
         self.constraint_name_line.setReadOnly(False)
 
         self.type_label.setText(constraint_type)
@@ -235,14 +256,21 @@ class ConstraintEditor(DockableWidget):
         select_children_btn.setIcon(QIcon(':output.png'))
         select_children_btn.clicked.connect(self.select_children)
 
+        delete_constraints_btn = QPushButton()
+        delete_constraints_btn.setIcon(QIcon(':trash.png'))
+        delete_constraints_btn.clicked.connect(self.delete_constraints)
+
         btn_layout = QHBoxLayout()
         btn_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
         btn_layout.addWidget(select_parents_btn)
         btn_layout.addWidget(select_constraints_btn)
         btn_layout.addWidget(select_children_btn)
+        btn_layout.addStretch()
+        btn_layout.addWidget(delete_constraints_btn)
 
         self.constraint_tree = ConstraintTree()
         self.constraint_tree.itemSelectionChanged.connect(self.reload_constraint_info_widget)
+        self.constraint_info_widget.constraint_tree = self.constraint_tree
 
         main_layout = QVBoxLayout(self)
         main_layout.addLayout(btn_layout)
@@ -251,12 +279,19 @@ class ConstraintEditor(DockableWidget):
 
         self.reload()
 
+    def delete_constraints(self):
+        selected_constraints = self.constraint_tree.get_selected_constraints()
+        existing_constraints = [x.path for x in selected_constraints if cmds.objExists(x.path)]
+        cmds.delete(existing_constraints)
+
+        self.constraint_tree.reload()
+
     def select_constraints(self):
         selected_constraints = self.constraint_tree.get_selected_constraints()
 
         constraint_names = list()
         for constraint in selected_constraints:
-            constraint_names.append(constraint.name)
+            constraint_names.append(constraint.path)
 
         cmds.select(constraint_names)
 
