@@ -4,7 +4,7 @@ from PySide2.QtWidgets import QLineEdit, QHBoxLayout, QFormLayout, QPushButton
 from PySide6.QtCore import QFile
 from PySide6.QtWidgets import QVBoxLayout, QTreeWidget, QTreeWidgetItem, QWidget, QLabel
 from PySide6.QtGui import QIcon, Qt, QPalette, QBrush
-from .utils import DockableWidget
+from .utils import DockableWidget, ScriptJob
 from maya import cmds
 
 
@@ -18,6 +18,39 @@ def get_image_path_from_type(object_type, default=':default.svg'):
         image_path = default
 
     return image_path
+
+
+class ReloadWidgetOnUndoScriptJob(ScriptJob):
+    EVENT_NAME = 'Undo'
+
+    def __init__(self, widget):
+        super().__init__()
+        self.widget = widget
+
+    def run(self):
+        self.widget.reload()
+
+
+class ReloadWidgetOnRedoScriptJob(ScriptJob):
+    EVENT_NAME = 'Redo'
+
+    def __init__(self, widget):
+        super().__init__()
+        self.widget = widget
+
+    def run(self):
+        self.widget.reload()
+
+
+class ReloadWidgetOnSceneOpenedScriptJob(ScriptJob):
+    EVENT_NAME = 'SceneOpened'
+
+    def __init__(self, widget):
+        super().__init__()
+        self.widget = widget
+
+    def run(self):
+        self.widget.reload()
 
 
 class Constraint:
@@ -58,6 +91,13 @@ class Constraint:
                 children.append(destination)
 
         return children
+
+    def get_uuid(self):
+        uuids = cmds.ls(self.path, uuid=True)
+        if uuids:
+            return uuids[0]
+        else:
+            return None
 
     @classmethod
     def get_all(cls):
@@ -100,6 +140,7 @@ class ConstraintTree(QTreeWidget):
         super().__init__()
 
         self.constraint_items = list()
+        self.selection_memory = dict()
 
         self.setHeaderHidden(True)
 
@@ -114,7 +155,18 @@ class ConstraintTree(QTreeWidget):
 
         return constraints
 
+    def clear(self):
+        self.constraint_items = list()
+        super().clear()
+
     def reload(self):
+        # store selection
+        for item in self.constraint_items:
+            uuid = item.constraint.get_uuid()
+            selected = item.isSelected()
+            self.selection_memory[uuid] = selected
+
+        # reload
         self.clear()
 
         for constraint in Constraint.get_all():
@@ -123,6 +175,16 @@ class ConstraintTree(QTreeWidget):
             constraint_item.reload()
             self.addTopLevelItem(constraint_item)
             self.constraint_items.append(constraint_item)
+
+        # restore selection
+        for item in self.constraint_items:
+            uuid = item.constraint.get_uuid()
+
+            if uuid in self.selection_memory:
+                selected = self.selection_memory[uuid]
+                item.setSelected(selected)
+
+        self.selection_memory = dict()
 
 
 class ConstraintInfoWidget(QWidget):
@@ -242,6 +304,13 @@ class ConstraintEditor(DockableWidget):
         self.setWindowTitle('Constraint Editor')
         self.resize(500, 700)
 
+        self.scriptJobs = (
+            ReloadWidgetOnUndoScriptJob(self),
+            ReloadWidgetOnRedoScriptJob(self),
+            ReloadWidgetOnSceneOpenedScriptJob(self),
+            # HighlightConstraintsOnSelectionChanged(self),
+        )
+
         self.constraint_info_widget = ConstraintInfoWidget()
 
         select_constraints_btn = QPushButton()
@@ -278,6 +347,16 @@ class ConstraintEditor(DockableWidget):
         main_layout.addWidget(self.constraint_info_widget)
 
         self.reload()
+
+    def hideEvent(self, event):
+        for script_job in self.scriptJobs:
+            script_job.stop()
+        super().hideEvent(event)
+
+    def showEvent(self, event):
+        for script_job in self.scriptJobs:
+            script_job.start()
+        super().showEvent(event)
 
     def delete_constraints(self):
         selected_constraints = self.constraint_tree.get_selected_constraints()

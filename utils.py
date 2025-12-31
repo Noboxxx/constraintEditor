@@ -76,3 +76,33 @@ class DockableWidget(QWidget):
         OpenMayaUI.MQtUtil.addWidgetToMayaLayout(int(widget_pointer), int(workspace_control))
 
         return widget
+
+
+class ScriptJob:
+    EVENT_NAME = None
+
+    def __init__(self):
+        self.id = None
+
+    def start(self, run=False):
+        if self.id:
+            cmds.warning(f'{self.__class__.__name__!r} already started')
+            return
+
+        self.id = cmds.scriptJob(event=(self.EVENT_NAME, self.run))
+        print(f'{self.__class__.__name__!r} started')
+
+        if run:
+            self.run()
+
+    def stop(self):
+        if not self.id:
+            cmds.warning(f'{self.__class__.__name__!r} already stopped')
+            return
+
+        cmds.scriptJob(kill=self.id)
+        self.id = None
+        print(f'{self.__class__.__name__!r} stopped')
+
+    def run(self):
+        pass
